@@ -2,25 +2,26 @@ module Main
 
 import Data.Vect
 
---Datatype for the representation of computations requiring ancillae
+--Datatype for the representation of computations requiring ancilla qubits
 
 data WithAncillae : Nat -> Type -> Type where
     WA : a -> WithAncillae n a
 
 --Useful shorthands:
 InPlace : Type -> Type
-InPlace t = WithAncillae 0 t --Computazioni senza ancillae
+InPlace t = WithAncillae 0 t -- Computations requiring no ancillae
 WithAncilla : Type -> Type
-WithAncilla t = WithAncillae 1 t --Computazioni con una sola ancilla
+WithAncilla t = WithAncillae 1 t -- Computations requiring a single ancilla
 
--- Ho provato a definire una graded monad come typeclass che accetta un generico Effect come annotazione
--- ma per qualche motivo non riesco a far tornare i tipi, per cui ho commentato via i seguenti blocchi
+-- Tried to define a graded monad typeclass with generic Effect annotations,
+-- but for some reason this never seem to compile correctly, so the following
+-- blocks have been commented out.
 
---interface Effect (t : Type) where
+--interface Effect (t : Type) where -- Effect typeclass (basically a repetition of Monoid)
 --    none : () -> t
 --    join : t -> t -> t
 
---interface Effect g => GradedMonad g (m : g -> Type -> Type) | m where
+--interface Effect g => GradedMonad g (m : g -> Type -> Type) | m where -- Graded monad typeclass
 --    return : a -> m none a
 --    (>>=) : m e a -> (a -> m f b) -> m (join e f) b
 --    (>>) : m e a -> m f b -> m (join e f) b
@@ -35,7 +36,8 @@ WithAncilla t = WithAncillae 1 t --Computazioni con una sola ancilla
 --    (WA x) >>= f = let (WA y) = f x in WA y
 --    (WA x) >> (WA y) = (WA y)
 
--- Ho quindi implementato le operazioni return e bind ad-hoc per WithAncillae
+
+-- Resorted to hard-wired implementation of the graded monad operations specifically for WithAncillae
 
 return : a -> WithAncillae 0 a
 return x = WA x
@@ -43,28 +45,29 @@ return x = WA x
 (>>=) : WithAncillae n a -> (a -> WithAncillae m b) -> WithAncillae (n+m) b
 (WA x) >>= f = let (WA y) = f x in WA y
 
---QUANTUM STUFF
 
---data types
+--QUANTUM STUFF (kind of)
 
-data Complex = C Double Double
+--data types (qubit and bit labels)
 
-data Qubit = Q Complex Complex
-data Bit = B Bool
+data Qubit = Q String
+data Bit = B String
 
 --operations
 
-init : InPlace Qubit
-init = return $ Q (C 1.0 0.0) (C 0.0 0.0)
+qinit : InPlace Qubit
+qinit = return $ Q "placeholder"
 
-initMany : (n:Nat) -> InPlace (Vect n Qubit)
-initMany Z = return []
-initMany (S n) = do
-    q <- init
-    rq <- initMany n
+qinitMany : (n:Nat) -> InPlace (Vect n Qubit)
+qinitMany Z = return []
+qinitMany (S n) = do
+    q <- qinit
+    rq <- qinitMany n
     return (q::rq)
 
-discard : Bit -> WithAncillae 1 () --Quando faccio discard, tengo traccia nella segnatura della monade
+-- When discarding a qubit (which is not output and is therefore assumed to be an ancilla)
+-- we keep track of one ancilla in the monad signature
+discard : Bit -> WithAncillae 1 ()
 discard b = WA ()
 
 discardMany : Vect n Bit -> WithAncillae n ()
@@ -73,71 +76,81 @@ discardMany (b::br) = do
     discard b
     discardMany br
 
--- Le seguenti operazioni sono assolutamente inutili dal punto di vista computazionale (non fanno niente),
--- visto che ci interessa fare dei test a compile-time mi sono preoccupato solo che avessero il tipo corretto.
 
-fakeH : Qubit -> InPlace Qubit
-fakeH q = return q
+-- Since we are just interested in the type level aspect of resource analysis, the following operations
+-- do absolutely nothing in terms of quantum computation or circuit building, they are just here
+-- as typed placeholders for realistic operations
 
-fakeCNOT : Qubit -> Qubit -> InPlace (Qubit,Qubit)
-fakeCNOT q1 q2 = return (q1,q2)
+hadamard : Qubit -> InPlace Qubit
+hadamard q = return q
 
-fakeToffoli : Qubit -> Qubit -> Qubit -> InPlace (Qubit,Qubit,Qubit)
-fakeToffoli q1 q2 q3 = return (q1,q2,q3)
+cnot : Qubit -> Qubit -> InPlace (Qubit,Qubit)
+cnot q1 q2 = return (q1,q2)
 
-fakeMeas : Qubit -> InPlace Bit
-fakeMeas q = return (B True)
+toffoli : Qubit -> Qubit -> Qubit -> InPlace (Qubit,Qubit,Qubit)
+toffoli q1 q2 q3 = return (q1,q2,q3)
 
-fakeMeasMany : Vect n Qubit -> InPlace (Vect n Bit)
-fakeMeasMany [] = return []
-fakeMeasMany (q::qr) = do
-    b <- fakeMeas q
-    br <- fakeMeasMany qr
+meas : Qubit -> InPlace Bit
+meas q = return (B "placeholder")
+
+measMany : Vect n Qubit -> InPlace (Vect n Bit)
+measMany [] = return []
+measMany (q::qr) = do
+    b <- meas q
+    br <- measMany qr
     return (b::br)
 
---Test vari
+-- Some tests
 
-simpleTest : Qubit -> WithAncilla () --replacing WithAncilla with fewer or more ancillae correctly fails at compile-time
-simpleTest q = fakeMeas q >>= \c => discard c
+-- In the following, replacing WithAncilla with fewer or more ancillae correctly fails at compile-time
+simpleTest : Qubit -> WithAncilla ()
+simpleTest q = meas q >>= \c => discard c
 
+-- Same here, but with more complex composition and do-notation (like in Quipper)
 slightlyMoreComplexTest : Qubit -> WithAncilla Qubit
 slightlyMoreComplexTest q = do
-    q <- fakeH q
-    q' <- init
-    (q,q') <- fakeCNOT q q'
-    c <- fakeMeas q'
+    q <- hadamard q
+    q' <- qinit
+    (q,q') <- cnot q q'
+    c <- meas q'
     discard c
     return q
 
---Trying to implement quantum carry-ripple adder from Vedral, V., Barenco, A., & Ekert, A. (1996).
---Quantum networks for elementary arithmetic operations. Physical Review A.
---This implementation adds two n-qubit registers using n ancillae in the process
+-- Trying to implement quantum carry-ripple adder from "Vedral, V., Barenco, A., & Ekert, A. (1996).
+-- Quantum networks for elementary arithmetic operations. Physical Review A."
+-- This algorithm adds a n-qubit register to a (n+1)-qubit register and stores the result
+-- in the latter register, thus implementing the unitary |a,b> |-> |a,a+b>.
+-- It uses n ancilla qubits in the process.
 
+-- Carry subcircuit
 carry : Qubit -> Qubit -> Qubit -> Qubit -> InPlace (Qubit,Qubit,Qubit,Qubit)
 carry q1 q2 q3 q4 = do
-    (q2,q3,q4) <- fakeToffoli q2 q3 q4
-    (q2,q3) <- fakeCNOT q2 q3
-    (q1,q3,q4) <- fakeToffoli q1 q3 q4
+    (q2,q3,q4) <- toffoli q2 q3 q4
+    (q2,q3) <- cnot q2 q3
+    (q1,q3,q4) <- toffoli q1 q3 q4
     return (q1,q2,q3,q4)
 
+-- Reverse of carry
 uncarry : Qubit -> Qubit -> Qubit -> Qubit -> InPlace (Qubit,Qubit,Qubit,Qubit)
 uncarry q1 q2 q3 q4 = do
-    (q1,q3,q4) <- fakeToffoli q1 q3 q4
-    (q2,q3) <- fakeCNOT q2 q3
-    (q2,q3,q4) <- fakeToffoli q2 q3 q4
+    (q1,q3,q4) <- toffoli q1 q3 q4
+    (q2,q3) <- cnot q2 q3
+    (q2,q3,q4) <- toffoli q2 q3 q4
     return (q1,q2,q3,q4)
 
+-- Full-adder subcircuit
 sum : Qubit -> Qubit -> Qubit -> InPlace (Qubit,Qubit,Qubit)
 sum q1 q2 q3 = do
-    (q2,q3) <- fakeCNOT q2 q3
-    (q1,q3) <- fakeCNOT q1 q3
+    (q2,q3) <- cnot q2 q3
+    (q1,q3) <- cnot q1 q3
     return (q1,q2,q3)
 
---"body" of the adder circuit. Note that ancillae are input and output
+-- "body" of the actual n-qubit adder circuit.
+-- At this phase the ancillae (c) are given as input and returned as output, so we are still InPlace
 adder' : Vect n Qubit -> Vect n Qubit -> Vect (n+1) Qubit -> InPlace (Vect n Qubit, Vect n Qubit, Vect (n+1) Qubit)
 adder' [c] [a] [b,b'] = do
     (c,a,b,b') <- carry c a b b'
-    (a,b) <- fakeCNOT a b
+    (a,b) <- cnot a b
     (c,a,b) <- sum c a b
     return ([c], [a], [b,b'])
 adder' (c::c'::cr) (a::ar) (b::br) = do
@@ -147,21 +160,34 @@ adder' (c::c'::cr) (a::ar) (b::br) = do
     (c,a,b) <- sum c a b
     return (c::c'::cr, a::ar, b::br)
 
---Necessary for ancillae arithmetic
+-- Necessary for ancilla arithmetic in the following function
 zeroNeutralRight : (n:Nat) -> (n+0 = n)
 zeroNeutralRight Z = Refl
 zeroNeutralRight (S m) = cong (zeroNeutralRight m) 
 
-
---The actual adder circuit with ancillae initialization and termination. Here we make use of the monad
-adder : (n:Nat) -> Vect n Qubit -> Vect (n+1) Qubit -> WithAncillae n (Vect n Qubit, Vect (n+1) Qubit)
---We must inform the type checker that n+0 ancillae is the same as n ancillae
-adder n a b = replace {P = \m => WithAncillae m (Vect n Qubit, Vect (n+1) Qubit)} (zeroNeutralRight n) $ do
-        c <- initMany n
+-- The actual adder circuit with ancilla initialization and termination.
+-- Here is where we actually make use of the monad
+adder : (n:Nat) ->
+        Vect n Qubit -> Vect (n+1) Qubit -> WithAncillae n (Vect n Qubit, Vect (n+1) Qubit)
+--We must inform the type checker that the resulting n+0 ancillae is indeed n ancillae
+adder n a b =
+    replace {P = \m => WithAncillae m (Vect n Qubit, Vect (n+1) Qubit)} (zeroNeutralRight n) $ do
+        c <- qinitMany n
         (c,a,b) <- adder' c a b
-        c <- fakeMeasMany c
+        c <- measMany c
         discardMany c
         return (a,b)
+
+-- If we did not annotate the right number of ancillae, the function would fail to type-check, e.g.:
+-- wrongAdder : (n:Nat) ->
+--     Vect n Qubit -> Vect (n+1) Qubit -> InPlace (Vect n Qubit, Vect (n+1) Qubit)
+-- wrongAdder n a b =
+--     replace {P = \m => WithAncillae m (Vect n Qubit, Vect (n+1) Qubit)} (zeroNeutralRight n) $ do
+--         c <- qinitMany n
+--         (c,a,b) <- adder' c a b
+--         c <- measMany c
+--         discardMany c
+--         return (a,b)
 
 --useless
 main : IO ()
